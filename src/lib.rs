@@ -155,51 +155,59 @@ impl Getch {
     }
 }
 
-/// Enable local echo
-pub fn enable_echo_input() {
-    #[cfg(windows)]
-    unsafe {
-        let input_handle = GetStdHandle(STD_INPUT_HANDLE);
-        let mut console_mode: DWORD = 0;
+/// Enable local echo and disable 
 
-        if input_handle == INVALID_HANDLE_VALUE {
+pub fn toggle_echo_input(enable: bool) {
+    #[cfg(windows)]
+    {
+        use std::ptr;
+        use winapi::um::consoleapi::{GetStdHandle, SetConsoleMode};
+        use winapi::um::processenv::GetStdHandle;
+        use winapi::um::winbase::STD_INPUT_HANDLE;
+        use winapi::um::wincon::{ENABLE_ECHO_INPUT, ENABLE_LINE_INPUT};
+
+        let input_handle = unsafe { GetStdHandle(STD_INPUT_HANDLE) };
+        let mut console_mode: u32 = 0;
+
+        if input_handle == ptr::null_mut() {
             return;
         }
 
-        if GetConsoleMode(input_handle, &mut console_mode) != 0 {
-            SetConsoleMode(input_handle, console_mode | ENABLE_ECHO_INPUT);
+        if unsafe { GetConsoleMode(input_handle, &mut console_mode) } == 0 {
+            return;
+        }
+
+        if enable {
+            console_mode |= ENABLE_ECHO_INPUT;
+        } else {
+            console_mode &= !ENABLE_ECHO_INPUT;
+        }
+
+        unsafe {
+            SetConsoleMode(input_handle, console_mode);
         }
     }
 
     #[cfg(not(windows))]
     {
-        let mut raw_termios = termios::tcgetattr(0).unwrap();
-        raw_termios.local_flags.insert(termios::LocalFlags::ECHO);
-        termios::tcsetattr(0, termios::SetArg::TCSADRAIN, &raw_termios).unwrap();
-    }
-}
+        use termios::{tcgetattr, tcsetattr, LocalFlags, SetArg};
+        use std::os::unix::io::AsRawFd;
+        use std::io::{self, Write};
 
-/// Disable local echo
-pub fn disable_echo_input() {
-    #[cfg(windows)]
-    unsafe {
-        let input_handle = GetStdHandle(STD_INPUT_HANDLE);
-        let mut console_mode: DWORD = 0;
+        let stdin = io::stdin();
+        let mut termios = tcgetattr(stdin.as_raw_fd()).expect("tcgetattr");
 
-        if input_handle == INVALID_HANDLE_VALUE {
-            return;
+        if enable {
+            termios.local_flags.insert(LocalFlags::ECHO);
+        } else {
+            termios.local_flags.remove(LocalFlags::ECHO);
         }
 
-        if GetConsoleMode(input_handle, &mut console_mode) != 0 {
-            SetConsoleMode(input_handle, console_mode & !ENABLE_ECHO_INPUT);
-        }
-    }
+        tcsetattr(stdin.as_raw_fd(), SetArg::TCSADRAIN, &termios).expect("tcsetattr");
 
-    #[cfg(not(windows))]
-    {
-        let mut raw_termios = termios::tcgetattr(0).unwrap();
-        raw_termios.local_flags.remove(termios::LocalFlags::ECHO);
-        termios::tcsetattr(0, termios::SetArg::TCSADRAIN, &raw_termios).unwrap();
+        // Flush the input buffer
+        let mut buffer = [0; 256];
+        while stdin.read(&mut buffer).is_ok() {}
     }
 }
 
